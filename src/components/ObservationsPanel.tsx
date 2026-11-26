@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import type { NormalizedDataset } from "@/types/academic";
 import type { StudentAnalysis } from "@/types/analysis";
-import type { GeneratedText, ObservationResult } from "@/types/observations";
+import type { DetectedSituation, GeneratedText, ObservationResult } from "@/types/observations";
 import { exportIndividualPdf, exportIndividualText, studentExportLabel } from "@/lib/export/exporters";
 
 type FilterKey =
@@ -52,6 +52,66 @@ function gradeLabel(value: "A" | "X" | null): string {
   if (value === "A") return "Aprobado (A)";
   if (value === "X") return "Desaprobado (X)";
   return "Sin información";
+}
+
+function GradeBadge({ value }: { value: "A" | "X" | null }) {
+  const tone =
+    value === "A"
+      ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+      : value === "X"
+        ? "border-rose-200 bg-rose-50 text-rose-800"
+        : "border-slate-200 bg-slate-100 text-slate-600";
+  return (
+    <span
+      role="img"
+      aria-label={gradeLabel(value)}
+      title={gradeLabel(value)}
+      className={`inline-flex min-w-[2.25rem] items-center justify-center rounded-md px-2 py-0.5 text-xs font-bold ring-1 ring-inset ${tone}`}
+    >
+      {value ?? "—"}
+    </span>
+  );
+}
+
+function situationDotClass(type: DetectedSituation["type"]): string {
+  if (type === "persistent_difficulty" || type === "disapproved" || type === "recent_difficulty") {
+    return "bg-rose-500";
+  }
+  if (type === "incomplete_information") return "bg-sky-500";
+  if (type === "positive_evolution" || type === "no_disapprovals_recorded") return "bg-emerald-500";
+  return "bg-slate-400";
+}
+
+function recommendationDotClass(priority: "high" | "normal" | "low"): string {
+  if (priority === "high") return "bg-rose-500";
+  if (priority === "normal") return "bg-blue-500";
+  return "bg-slate-400";
+}
+
+function DetailCard({
+  title,
+  count,
+  className = "",
+  children,
+}: {
+  title: string;
+  count?: number;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className={`min-w-0 rounded-xl border border-slate-200 p-4 ${className}`}>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h5 className="text-xs font-semibold uppercase tracking-wide text-slate-600">{title}</h5>
+        {count !== undefined && (
+          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700 ring-1 ring-inset ring-slate-200">
+            {count}
+          </span>
+        )}
+      </div>
+      <div className="mt-3 min-w-0">{children}</div>
+    </section>
+  );
 }
 
 const filterOptions: { key: FilterKey; label: string }[] = [
@@ -338,7 +398,11 @@ export function ObservationsPanel({
               <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
                 <div className="min-w-0">
                   <h4 className="break-words text-lg font-semibold text-slate-900">{selectedAnalysis.studentNumber ? `${selectedAnalysis.studentNumber}. ` : ""}{displayStudentName(selectedAnalysis.studentName)}</h4>
-                  <p className="mt-1 break-words text-sm leading-relaxed text-slate-700">Resumen: Aprobados {selectedAnalysis.summary.approved} · Desaprobados {selectedAnalysis.summary.disapproved} · Sin dato {selectedAnalysis.summary.missing}</p>
+                  <div className="mt-2 flex flex-wrap gap-2 text-xs font-semibold">
+                    <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-emerald-800 ring-1 ring-inset ring-emerald-200">{selectedAnalysis.summary.approved} {selectedAnalysis.summary.approved === 1 ? "aprobado" : "aprobados"}</span>
+                    <span className="rounded-full bg-rose-50 px-2.5 py-1 text-rose-800 ring-1 ring-inset ring-rose-200">{selectedAnalysis.summary.disapproved} {selectedAnalysis.summary.disapproved === 1 ? "desaprobado" : "desaprobados"}</span>
+                    <span className="rounded-full bg-slate-100 px-2.5 py-1 text-slate-700 ring-1 ring-inset ring-slate-200">{selectedAnalysis.summary.missing} sin dato</span>
+                  </div>
                   <div className="mt-2"><CategoryBadges categories={selectedAnalysis.categories} /></div>
                 </div>
                 <div className="flex shrink-0 flex-wrap items-center gap-2">
@@ -358,73 +422,80 @@ export function ObservationsPanel({
                 {selectedEdit?.isEdited && !isOutdated && <p className="font-medium text-violet-900">Estás viendo/editando una versión manual (diferenciada de la automática).</p>}
               </div>
 
-              <div className="grid grid-cols-1 gap-4 2xl:grid-cols-3">
-                <div className="min-w-0 overflow-hidden rounded-xl border border-slate-200 p-4">
-                  <h5 className="text-sm font-semibold uppercase tracking-wide text-slate-700">Resultados por materia</h5>
-                  <div className="table-scrollbar mt-3 max-h-72 overflow-auto rounded-lg border border-slate-200 2xl:max-h-[32rem]">
-                    <table className="min-w-full border-collapse text-sm">
-                      <thead className="sticky top-0 bg-slate-100 text-slate-900">
-                        <tr>
-                          <th className="px-3 py-2 text-left font-semibold">Materia</th>
-                          <th className="px-3 py-2 text-left font-semibold">1C</th>
-                          <th className="px-3 py-2 text-left font-semibold">2C</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {selectedAnalysis.subjects.map((s) => (
-                          <tr key={s.subject} className="border-t border-slate-200 odd:bg-white even:bg-slate-50">
-                            <th scope="row" className="break-words px-3 py-2 text-left font-medium text-slate-900">{s.subject}</th>
-                            <td className="whitespace-nowrap px-3 py-2 text-slate-800">{gradeLabel(s.grades["1C"])}</td>
-                            <td className="whitespace-nowrap px-3 py-2 text-slate-800">{gradeLabel(s.grades["2C"])}</td>
+              <div className="grid min-w-0 grid-cols-1 items-start gap-4 xl:grid-cols-2">
+                <div className="flex min-w-0 flex-col gap-4">
+                  <DetailCard title="Resultados por materia" className="bg-white">
+                    <p className="text-xs leading-relaxed text-slate-500">A = aprobado · X = desaprobado · — = sin información</p>
+                    <div className="table-scrollbar mt-3 overflow-x-auto rounded-lg border border-slate-200">
+                      <table className="w-full min-w-[19rem] border-collapse text-sm">
+                        <thead className="sticky top-0 z-10 bg-slate-50 text-slate-900">
+                          <tr>
+                            <th scope="col" className="border-b border-slate-200 px-3 py-2 text-left font-semibold">Materia</th>
+                            <th scope="col" className="border-b border-slate-200 px-3 py-2 text-center font-semibold">1C</th>
+                            <th scope="col" className="border-b border-slate-200 px-3 py-2 text-center font-semibold">2C</th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
+                        </thead>
+                        <tbody>
+                          {selectedAnalysis.subjects.map((s) => (
+                            <tr key={s.subject} className="border-b border-slate-200 last:border-0 odd:bg-white even:bg-slate-50">
+                              <th scope="row" className="break-words px-3 py-2 text-left font-medium text-slate-900">{s.subject}</th>
+                              <td className="px-3 py-2 text-center"><GradeBadge value={s.grades["1C"]} /></td>
+                              <td className="px-3 py-2 text-center"><GradeBadge value={s.grades["2C"]} /></td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </DetailCard>
 
-                <div className="min-w-0 space-y-4">
-                  <div className="min-w-0 overflow-hidden rounded-xl border border-slate-200 p-4">
-                    <h5 className="text-sm font-semibold uppercase tracking-wide text-slate-700">Situaciones detectadas</h5>
-                    {selectedObs.situations.length === 0 ? (
-                      <p className="mt-2 text-sm leading-relaxed text-slate-600">No se detectaron situaciones.</p>
+                  <DetailCard title="Recomendaciones detectadas" count={selectedObs.recommendations.length} className="bg-white">
+                    {selectedObs.recommendations.length === 0 ? (
+                      <p className="text-sm leading-relaxed text-slate-600">No se detectaron recomendaciones.</p>
                     ) : (
-                      <ul className="mt-2 max-h-56 list-disc space-y-2.5 overflow-auto break-words pl-5 pr-1 text-sm leading-relaxed text-slate-800">
-                        {selectedObs.situations.map((s, i) => (
-                          <li key={`${s.type}-${s.subject ?? "all"}-${i}`}>{s.description}</li>
+                      <ul className="space-y-2">
+                        {selectedObs.recommendations.map((r, i) => (
+                          <li key={`${r.type}-${i}`} className="flex gap-2.5 rounded-lg bg-slate-50 px-3 py-2 text-sm leading-6 text-slate-800 ring-1 ring-inset ring-slate-200/80">
+                            <span className={`mt-2 h-1.5 w-1.5 shrink-0 rounded-full ${recommendationDotClass(r.priority)}`} aria-hidden="true" />
+                            <span className="min-w-0 break-words">{r.text}</span>
+                          </li>
                         ))}
                       </ul>
                     )}
-                  </div>
-
-                  <div className="min-w-0 overflow-hidden rounded-xl border border-slate-200 p-4">
-                    <h5 className="text-sm font-semibold uppercase tracking-wide text-slate-700">Recomendaciones detectadas</h5>
-                    <ul className="mt-2 max-h-56 list-disc space-y-2.5 overflow-auto break-words pl-5 pr-1 text-sm leading-relaxed text-slate-800">
-                      {selectedObs.recommendations.map((r, i) => (
-                        <li key={`${r.type}-${i}`}>{r.text}</li>
-                      ))}
-                    </ul>
-                  </div>
+                  </DetailCard>
                 </div>
 
-                <div className="min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-slate-50 p-4">
-                  <h5 className="text-sm font-semibold uppercase tracking-wide text-slate-700">Observación generada / editable</h5>
-                  <div className="mt-3 grid gap-4 sm:grid-cols-2 2xl:grid-cols-1">
-                    <div className="min-w-0 sm:col-span-2 2xl:col-span-1">
+                <DetailCard title="Situaciones detectadas" count={selectedObs.situations.length} className="bg-white">
+                  {selectedObs.situations.length === 0 ? (
+                    <p className="text-sm leading-relaxed text-slate-600">No se detectaron situaciones.</p>
+                  ) : (
+                    <ul className="space-y-2">
+                      {selectedObs.situations.map((s, i) => (
+                        <li key={`${s.type}-${s.subject ?? "all"}-${i}`} className="flex gap-2.5 rounded-lg bg-slate-50 px-3 py-2 text-sm leading-6 text-slate-800 ring-1 ring-inset ring-slate-200/80">
+                          <span className={`mt-2 h-1.5 w-1.5 shrink-0 rounded-full ${situationDotClass(s.type)}`} aria-hidden="true" />
+                          <span className="min-w-0 break-words">{s.description}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </DetailCard>
+
+                <DetailCard title="Observación generada / editable" className="bg-slate-50 xl:col-span-2">
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <div className="min-w-0 md:col-span-2">
                       <label className="mb-1 block break-words text-sm font-semibold text-slate-900" htmlFor={`sit-${resolvedSelectedId}`}>Situación académica</label>
-                      <textarea id={`sit-${resolvedSelectedId}`} value={currentText.academicSituation} onChange={(e) => updateText("academicSituation", e.target.value)} rows={5} className="w-full min-w-0 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm leading-relaxed text-slate-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                      <textarea id={`sit-${resolvedSelectedId}`} value={currentText.academicSituation} onChange={(e) => updateText("academicSituation", e.target.value)} rows={4} className="w-full min-w-0 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm leading-relaxed text-slate-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500" />
                     </div>
                     <div className="min-w-0">
                       <label className="mb-1 block break-words text-sm font-semibold text-slate-900" htmlFor={`evo-${resolvedSelectedId}`}>Evolución</label>
-                      <textarea id={`evo-${resolvedSelectedId}`} value={currentText.evolution} onChange={(e) => updateText("evolution", e.target.value)} rows={5} className="w-full min-w-0 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm leading-relaxed text-slate-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                      <textarea id={`evo-${resolvedSelectedId}`} value={currentText.evolution} onChange={(e) => updateText("evolution", e.target.value)} rows={4} className="w-full min-w-0 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm leading-relaxed text-slate-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500" />
                     </div>
                     <div className="min-w-0">
                       <label className="mb-1 block break-words text-sm font-semibold text-slate-900" htmlFor={`rec-${resolvedSelectedId}`}>Recomendaciones</label>
-                      <textarea id={`rec-${resolvedSelectedId}`} value={currentText.recommendations} onChange={(e) => updateText("recommendations", e.target.value)} rows={5} className="w-full min-w-0 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm leading-relaxed text-slate-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                      <textarea id={`rec-${resolvedSelectedId}`} value={currentText.recommendations} onChange={(e) => updateText("recommendations", e.target.value)} rows={4} className="w-full min-w-0 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm leading-relaxed text-slate-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500" />
                     </div>
                   </div>
-                  <p className="mt-2 text-xs leading-relaxed text-slate-600">La edición manual se conserva en esta sesión y no se sobrescribe automáticamente si cambian los datos analizados.</p>
-                </div>
+                  <p className="mt-3 text-xs leading-relaxed text-slate-600">La edición manual se conserva en esta sesión y no se sobrescribe automáticamente si cambian los datos analizados.</p>
+                </DetailCard>
               </div>
             </div>
           )}

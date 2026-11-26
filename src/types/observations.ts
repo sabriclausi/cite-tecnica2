@@ -36,5 +36,4 @@ export interface ObservationResult {
   situations: DetectedSituation[];
   recommendations: Recommendation[];
   generatedText: GeneratedText;
-  generatedAt: string;
 }

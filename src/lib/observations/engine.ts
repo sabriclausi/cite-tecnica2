@@ -253,7 +253,6 @@ export function generateObservation(
     situations,
     recommendations,
     generatedText,
-    generatedAt: new Date().toISOString(),
   };
 }
 
