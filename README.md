@@ -6,7 +6,7 @@ Aplicación web **local y privada** para importar planillas académicas (Excel/C
 
 - Permite cargar **uno o varios archivos** (`.xlsx`, `.xls`, `.ods`, `.csv`) con una o varias hojas.
 - Procesa los datos **en tu navegador**: no envía la información a internet ni a servicios externos y no modifica los archivos originales.
-- Normaliza resultados (`A`/`X`/sin dato), muestra tablas por planilla y detecta situaciones académicas.
+- Normaliza resultados (`A`/`X`/sin dato) y también notas numéricas (**6 o más = aprobado, menos de 6 = desaprobado**, con coma o punto decimal), muestra tablas por planilla y detecta situaciones académicas.
 - Genera observaciones pedagógicas individuales (texto editable en la sesión) y resúmenes del curso.
 - Muestra visualizaciones/gráficos con filtro por período (**1C**, **2C** o **Ambos**), útil cuando el segundo cuatrimestre todavía no tiene notas cargadas.
 - Exporta informes y resultados (texto, PDF, Excel). **El DNI nunca se incluye** en gráficos ni exportaciones; las exportaciones son anónimas por defecto y podés optar por incluir nombres cuando lo necesites.
@@ -106,7 +106,8 @@ Cada vez que quieras usar la app:
 
 4. **Visualizaciones (gráficos)**
    - Incluyen gráficos por categorías, situaciones por materia, recomendaciones, dificultades, comparación por período, distribución de materias pendientes y una matriz alumno-materia.
-   - Usá el selector de **Período analizado** (`Ambos`, `Solo 1C`, `Solo 2C`) para ver los datos del cuatrimestre que necesites (útil si 2C todavía no terminó).
+   - Los gráficos nuevos muestran: **11)** desaprobaciones en 1C y 2C (resultados y alumnos, con número y porcentaje), **12)** materias que figuran en el texto de observaciones originales (gráfico y tabla por alumno) y **13)** porcentaje de alumnos con materias desaprobadas, con tablas de *5 o más*, *1 a 4* y *ninguna*.
+   - Usá el selector de **Período analizado** (`Ambos`, `Solo 1C`, `Solo 2C`) para ver los datos del cuatrimestre que necesites (útil si 2C todavía no terminó). El gráfico 11 siempre compara ambos cuatrimestres y el 12 usa el texto original, que no distingue períodos.
    - En la matriz podés activar **“Anonimizar nombres”** si vas a proyectar o compartir la pantalla.
 
 5. **Exportar**

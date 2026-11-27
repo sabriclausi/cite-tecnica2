@@ -6,6 +6,7 @@ import {
   BarChart,
   CartesianGrid,
   Cell,
+  LabelList,
   Legend,
   Pie,
   PieChart,
@@ -17,7 +18,14 @@ import {
 import type { NormalizedDataset } from "@/types/academic";
 import type { StudentAnalysis, SubjectAnalysis } from "@/types/analysis";
 import type { ObservationResult } from "@/types/observations";
-import { aggregateCourseData } from "@/lib/analysis/aggregations";
+import {
+  aggregateCourseData,
+  getDisapprovalsByPeriod,
+  getObservationMetrics,
+  getStudentsByDisapprovedSubjects,
+  type DisapprovedStudentRow,
+  type ObservationMetrics,
+} from "@/lib/analysis/aggregations";
 
 const COLORS = ["#1d4ed8", "#dc2626", "#059669", "#d97706", "#0284c7", "#7c3aed", "#475569"];
 
@@ -29,32 +37,168 @@ const periodLabels: Record<PeriodView, string> = {
   "2C": "2.º cuatrimestre",
 };
 
+const chartHelp = {
+  attention: "Cuenta alumnos, no materias. Un mismo alumno puede aparecer en más de un grupo.",
+  situations: "Cada cuenta es un par alumno–materia con X o sin dato; por eso puede superar el total de alumnos.",
+  recommendations: "Un alumno puede tener varias recomendaciones a la vez, así que la suma puede ser mayor que el total de alumnos.",
+  persistent: "Cuenta alumnos por materia que desaprobaron en 1C y en 2C. Una misma materia puede repetirse para varios alumnos.",
+  periodComparison: "Cuenta resultados (alumno × materia), no alumnos: cada alumno aporta una celda por materia y período.",
+  pending: "Ejemplo: si la barra del 3 marca 2 alumnos, esos 2 alumnos tienen 3 materias con X en el período elegido.",
+  disapprovalsByPeriod: "Izquierda: resultados X sobre los resultados evaluados. Derecha: alumnos con al menos una X sobre el total de alumnos.",
+  observation: "Se lee la columna “Observaciones” y reconoce abreviaturas como “Biol.” o “P.D.Leng.”. No es una nota: lo que no coincide va a “Sin clasificar”.",
+  disapprovalShare: "Cuenta alumnos, no materias: un alumno con 6 desaprobadas entra una sola vez en “Con desaprobaciones”.",
+};
+
 function ChartCard({
   title,
   description,
+  help,
   note,
+  heightClass = "h-72",
   children,
 }: {
   title: string;
   description?: string;
+  help?: string;
   note?: string;
+  heightClass?: string;
   children: React.ReactNode;
 }) {
   return (
     <section className="min-w-0 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
       <h4 className="text-base font-semibold text-slate-900">{title}</h4>
       {description && <p className="mt-1 text-sm text-slate-600">{description}</p>}
+      {help && (
+        <p className="mt-2 rounded-md bg-slate-50 px-2 py-1 text-xs leading-5 text-slate-600 ring-1 ring-inset ring-slate-200">
+          {help}
+        </p>
+      )}
       {note && <p className="mt-1 text-xs text-amber-800">{note}</p>}
-      <div className="mt-3 h-72 w-full">{children}</div>
+      <div className={`mt-3 w-full min-w-0 overflow-hidden ${heightClass}`}>{children}</div>
     </section>
   );
 }
 
-function studentDisplayLabel(a: StudentAnalysis, idx: number, hideNames: boolean): string {
+function formatPercent(value: number): string {
+  return `${value.toFixed(1).replace(/\.0$/, "")}%`;
+}
+
+function labeledCount(count: number, percentage: number): string {
+  return `${count} (${formatPercent(percentage)})`;
+}
+
+function studentDisplayLabel(
+  a: { studentName: string; studentNumber: string | null },
+  idx: number,
+  hideNames: boolean,
+): string {
   if (hideNames) {
     return a.studentNumber ? `Alumno ${a.studentNumber}` : `Alumno ${idx + 1}`;
   }
   return a.studentNumber ? `${a.studentNumber}. ${a.studentName}` : a.studentName;
+}
+
+function StudentCountTable({
+  title,
+  rows,
+  hideNames,
+}: {
+  title: string;
+  rows: DisapprovedStudentRow[];
+  hideNames: boolean;
+}) {
+  return (
+    <section className="min-w-0 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h5 className="text-sm font-semibold text-slate-900">{title}</h5>
+        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700 ring-1 ring-inset ring-slate-200">
+          {rows.length} alumnos
+        </span>
+      </div>
+      {rows.length === 0 ? (
+        <p className="mt-3 text-sm text-slate-600">Sin alumnos en este grupo.</p>
+      ) : (
+        <div className="table-scrollbar mt-3 max-h-64 overflow-auto rounded-lg border border-slate-200">
+          <table className="min-w-full border-collapse text-sm">
+            <thead className="bg-slate-100">
+              <tr>
+                <th className="border-b border-r border-slate-300 px-3 py-2 text-left font-semibold text-slate-900">Alumno</th>
+                <th className="border-b border-slate-300 px-3 py-2 text-right font-semibold text-slate-900">Materias desaprobadas</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row, idx) => (
+                <tr key={row.studentId} className="odd:bg-white even:bg-slate-50">
+                  <th scope="row" className="border-b border-r border-slate-200 px-3 py-2 text-left font-medium text-slate-900 whitespace-nowrap">
+                    {studentDisplayLabel(row, idx, hideNames)}
+                  </th>
+                  <td className="border-b border-slate-200 px-3 py-2 text-right tabular-nums text-slate-800">
+                    {row.disapprovedSubjects}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ObservationStudentsTable({
+  metrics,
+  hideNames,
+}: {
+  metrics: ObservationMetrics;
+  hideNames: boolean;
+}) {
+  const rows = metrics.rows.filter((row) => row.subjects.length > 0 || row.unmatched.length > 0);
+
+  return (
+    <section className="min-w-0 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h5 className="text-sm font-semibold text-slate-900">Materias en observación por alumno</h5>
+          <p className="mt-1 text-xs text-slate-600">
+            Tomado del texto original de la planilla; no se interpreta como resultado aprobado ni desaprobado.
+          </p>
+        </div>
+        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700 ring-1 ring-inset ring-slate-200">
+          {metrics.studentsWithObservations} alumnos
+        </span>
+      </div>
+      {rows.length === 0 ? (
+        <p className="mt-3 text-sm text-slate-600">No hay observaciones originales cargadas.</p>
+      ) : (
+        <div className="table-scrollbar mt-3 max-h-[28rem] overflow-auto rounded-lg border border-slate-200">
+          <table className="min-w-full border-collapse text-sm">
+            <thead className="bg-slate-100">
+              <tr>
+                <th className="border-b border-r border-slate-300 px-3 py-2 text-left font-semibold text-slate-900">Alumno</th>
+                <th className="border-b border-r border-slate-300 px-3 py-2 text-left font-semibold text-slate-900">Materias en observación</th>
+                <th className="border-b border-slate-300 px-3 py-2 text-left font-semibold text-slate-900">Sin clasificar</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row, idx) => (
+                <tr key={row.studentId} className="odd:bg-white even:bg-slate-50">
+                  <th scope="row" className="border-b border-r border-slate-200 px-3 py-2 text-left font-medium text-slate-900 whitespace-nowrap">
+                    {studentDisplayLabel(row, idx, hideNames)}
+                  </th>
+                  <td className="border-b border-r border-slate-200 px-3 py-2 text-slate-800">
+                    {row.subjects.length > 0 ? row.subjects.join(", ") : "—"}
+                  </td>
+                  <td className="border-b border-slate-200 px-3 py-2 text-slate-600">
+                    {row.unmatched.length > 0 ? row.unmatched.join("; ") : "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
 }
 
 function subjectSituationDetailsBoth(s: SubjectAnalysis): string[] {
@@ -228,9 +372,45 @@ export function ChartsPanel({
     };
   }, [periodView, agg, analyses, dataset.subjects]);
 
+  const disapprovalsByPeriod = useMemo(() => getDisapprovalsByPeriod(analyses), [analyses]);
+  const observationMetrics = useMemo(() => getObservationMetrics(dataset), [dataset]);
+  const disapprovalBuckets = useMemo(
+    () => getStudentsByDisapprovedSubjects(analyses, periodView),
+    [analyses, periodView],
+  );
+
   const topSituations = periodData.situationsBySubject.filter((d) => d.count > 0).slice(0, 12);
   const topPersistent = periodData.persistentBySubject.filter((d) => d.count > 0).slice(0, 12);
-  const topPending = [...periodData.pendingDist].sort((a, b) => b.students - a.students).slice(0, 10);
+  const topPending = periodData.pendingDist.filter((entry) => entry.students > 0).slice(0, 11);
+
+  const disapprovedResultsData = disapprovalsByPeriod.map((metric) => ({
+    period: metric.period === "1C" ? "1.º cuatrimestre" : "2.º cuatrimestre",
+    value: metric.disapprovedResults,
+    label: labeledCount(metric.disapprovedResults, metric.disapprovedPercentage),
+  }));
+  const studentsWithDisapprovalData = disapprovalsByPeriod.map((metric) => ({
+    period: metric.period === "1C" ? "1.º cuatrimestre" : "2.º cuatrimestre",
+    value: metric.studentsWithDisapproval,
+    label: labeledCount(metric.studentsWithDisapproval, metric.studentsPercentage),
+  }));
+  const observationSubjectData = observationMetrics.bySubject.slice(0, 12).map((entry) => ({
+    subject: entry.subject,
+    students: entry.students,
+    label: labeledCount(entry.students, entry.percentage),
+  }));
+  const withoutDisapproval = disapprovalBuckets.totalStudents - disapprovalBuckets.withAny;
+  const disapprovalShareData = [
+    {
+      name: "Con desaprobaciones",
+      students: disapprovalBuckets.withAny,
+      label: labeledCount(disapprovalBuckets.withAny, disapprovalBuckets.withAnyPercentage),
+    },
+    {
+      name: "Sin desaprobaciones",
+      students: withoutDisapproval,
+      label: labeledCount(withoutDisapproval, disapprovalBuckets.withoutPercentage),
+    },
+  ];
 
   const situationsDescription =
     periodView === "both"
@@ -302,7 +482,7 @@ export function ChartsPanel({
         <p className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">No hay datos suficientes para generar gráficos.</p>
       ) : (
         <div className="grid gap-4 xl:grid-cols-2">
-          <ChartCard title="1. Alumnos por categoría de atención" description={attentionDescription}>
+          <ChartCard title="1. Alumnos por categoría de atención" description={attentionDescription} help={chartHelp.attention}>
             {periodData.attentionData.length === 0 ? <EmptyChart /> : (
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
@@ -316,7 +496,7 @@ export function ChartsPanel({
             )}
           </ChartCard>
 
-          <ChartCard title="4. Cantidad de situaciones detectadas por materia" description={situationsDescription}>
+          <ChartCard title="4. Cantidad de situaciones detectadas por materia" description={situationsDescription} help={chartHelp.situations}>
             {topSituations.length === 0 ? <EmptyChart /> : (
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={topSituations} layout="vertical" margin={{ left: 20, right: 10, top: 5, bottom: 5 }}>
@@ -333,6 +513,7 @@ export function ChartsPanel({
           <ChartCard
             title="5. Distribución de recomendaciones por tipo"
             description="Cantidad de alumnos para los que se identifica cada recomendación."
+            help={chartHelp.recommendations}
             note={periodData.recommendationsNote}
           >
             {periodData.recommendationsByType.length === 0 ? <EmptyChart /> : (
@@ -351,6 +532,7 @@ export function ChartsPanel({
           <ChartCard
             title="6. Materias con mayor cantidad de dificultades persistentes"
             description="Materias con X en ambos períodos (1C y 2C)."
+            help={chartHelp.persistent}
             note={periodData.persistentNote}
           >
             {periodView !== "both" ? (
@@ -370,11 +552,16 @@ export function ChartsPanel({
             )}
           </ChartCard>
 
-          <ChartCard title="7. Comparación de situaciones entre períodos" description={periodComparisonDescription}>
+          <ChartCard
+            title="7. Comparación de situaciones entre períodos"
+            description={periodComparisonDescription}
+            help={chartHelp.periodComparison}
+            heightClass="h-96"
+          >
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={periodData.periodComparison}>
+              <BarChart data={periodData.periodComparison} margin={{ top: 28, right: 12, left: 0, bottom: 28 }}>
                 <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="period" />
+                <XAxis dataKey="period" padding={{ left: 12, right: 12 }} />
                 <YAxis allowDecimals={false} />
                 <Tooltip />
                 <Legend />
@@ -385,20 +572,137 @@ export function ChartsPanel({
             </ResponsiveContainer>
           </ChartCard>
 
-          <ChartCard title="10. Distribución de alumnos según cantidad de materias pendientes" description={pendingDescription}>
+          <ChartCard
+            title="10. Alumnos según cantidad de materias desaprobadas"
+            description={pendingDescription}
+            help={chartHelp.pending}
+            heightClass="h-96"
+          >
             {topPending.length === 0 ? <EmptyChart /> : (
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={topPending}>
+                <BarChart data={topPending} margin={{ top: 28, right: 12, left: 0, bottom: 28 }}>
                   <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="pendingCount" label={{ value: "Materias con X", position: "insideBottom", offset: -2 }} />
+                  <XAxis
+                    dataKey="pendingCount"
+                    padding={{ left: 12, right: 12 }}
+                    label={{ value: "Materias con X", position: "bottom", offset: 4 }}
+                  />
                   <YAxis allowDecimals={false} />
                   <Tooltip />
-                  <Bar dataKey="students" name="Alumnos" fill="#7c3aed" />
+                  <Bar dataKey="students" name="Alumnos" fill="#7c3aed">
+                    <LabelList dataKey="students" position="top" fontSize={10} fill="#334155" />
+                  </Bar>
                 </BarChart>
               </ResponsiveContainer>
             )}
           </ChartCard>
+
+          <ChartCard
+            title="11. Desaprobaciones por cuatrimestre"
+            description="Resultados desaprobados y alumnos con al menos una desaprobación en 1C y 2C. El número y el porcentaje se muestran sobre cada barra."
+            help={chartHelp.disapprovalsByPeriod}
+            note="Este gráfico siempre compara ambos cuatrimestres, independientemente del período seleccionado."
+          >
+            <div className="grid h-full gap-3 sm:grid-cols-2">
+              <div className="min-w-0">
+                <p className="mb-1 text-center text-xs font-semibold uppercase tracking-wide text-slate-600">Resultados desaprobados</p>
+                <div className="h-[calc(100%-1.25rem)] w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={disapprovedResultsData} margin={{ top: 20, right: 8, left: 0, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis dataKey="period" tick={{ fontSize: 11 }} />
+                      <YAxis allowDecimals={false} domain={[0, (dataMax: number) => Math.max(1, dataMax * 1.25)]} />
+                      <Tooltip />
+                      <Bar dataKey="value" name="Resultados X" fill="#dc2626">
+                        <LabelList dataKey="label" position="top" fontSize={10} fill="#334155" />
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+              <div className="min-w-0">
+                <p className="mb-1 text-center text-xs font-semibold uppercase tracking-wide text-slate-600">Alumnos con desaprobaciones</p>
+                <div className="h-[calc(100%-1.25rem)] w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={studentsWithDisapprovalData} margin={{ top: 20, right: 8, left: 0, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis dataKey="period" tick={{ fontSize: 11 }} />
+                      <YAxis allowDecimals={false} domain={[0, (dataMax: number) => Math.max(1, dataMax * 1.25)]} />
+                      <Tooltip />
+                      <Bar dataKey="value" name="Alumnos" fill="#d97706">
+                        <LabelList dataKey="label" position="top" fontSize={10} fill="#334155" />
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            </div>
+          </ChartCard>
+
+          <ChartCard
+            title="12. Materias en observación según la planilla"
+            description="Alumnos que tienen cada materia en el texto de observaciones original, con número y porcentaje sobre el total del curso."
+            help={chartHelp.observation}
+            note="El texto original no distingue cuatrimestres y no se interpreta como resultado académico."
+          >
+            {observationSubjectData.length === 0 ? <EmptyChart /> : (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={observationSubjectData} layout="vertical" margin={{ left: 20, right: 90, top: 5, bottom: 5 }}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis type="number" allowDecimals={false} domain={[0, (dataMax: number) => Math.max(1, dataMax * 1.3)]} />
+                  <YAxis type="category" dataKey="subject" width={140} tick={{ fontSize: 11 }} />
+                  <Tooltip />
+                  <Bar dataKey="students" name="Alumnos" fill="#0284c7">
+                    <LabelList dataKey="label" position="right" fontSize={10} fill="#334155" />
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            )}
+          </ChartCard>
+
+          <ChartCard
+            title="13. Porcentaje de alumnos con materias desaprobadas"
+            description={periodView === "both"
+              ? "Alumnos con al menos una materia desaprobada en el año vs. alumnos sin desaprobaciones."
+              : `Alumnos con al menos una materia desaprobada en el ${periodLabels[periodView]} vs. alumnos sin desaprobaciones.`}
+            help={chartHelp.disapprovalShare}
+          >
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={disapprovalShareData} margin={{ top: 20, right: 8, left: 0, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+                <YAxis allowDecimals={false} domain={[0, (dataMax: number) => Math.max(1, dataMax * 1.25)]} />
+                <Tooltip />
+                <Bar dataKey="students" name="Alumnos">
+                  {disapprovalShareData.map((entry, idx) => (
+                    <Cell key={entry.name} fill={idx === 0 ? "#dc2626" : "#059669"} />
+                  ))}
+                  <LabelList dataKey="label" position="top" fontSize={11} fill="#334155" />
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </ChartCard>
         </div>
+      )}
+
+      {!noData && (
+        <section className="mt-4 space-y-4" aria-label="Detalle de observaciones y desaprobaciones">
+          <ObservationStudentsTable metrics={observationMetrics} hideNames={hideNames} />
+
+          <div className="space-y-2">
+            <div>
+              <h4 className="text-base font-semibold text-slate-900">13. Alumnos según cantidad de materias desaprobadas</h4>
+              <p className="mt-1 text-sm text-slate-600">
+                Las tablas respetan el período seleccionado y la opción “Anonimizar nombres” de la matriz. No incluyen DNI.
+              </p>
+            </div>
+            <div className="grid gap-4 xl:grid-cols-3">
+              <StudentCountTable title="5 o más materias desaprobadas" rows={disapprovalBuckets.fiveOrMore} hideNames={hideNames} />
+              <StudentCountTable title="Menos de 5 materias desaprobadas (1 a 4)" rows={disapprovalBuckets.oneToFour} hideNames={hideNames} />
+              <StudentCountTable title="Sin materias desaprobadas" rows={disapprovalBuckets.none} hideNames={hideNames} />
+            </div>
+          </div>
+        </section>
       )}
 
       <section className="mt-4 min-w-0 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -465,7 +769,7 @@ export function ChartsPanel({
       </section>
 
       <p className="mt-4 text-sm text-slate-600">
-        Nota: los gráficos 2 (dificultades persistentes) y 3 (evolución favorable) se reflejan en los conteos del gráfico 1 y en la matriz. El gráfico 8 (comparación histórica entre años) requiere datos de distintos años lectivos identificados y comparables (Fase 6).
+        Nota: los gráficos 2 (dificultades persistentes) y 3 (evolución favorable) se reflejan en los conteos del gráfico 1 y en la matriz. Los gráficos 11 a 13 muestran desaprobaciones por cuatrimestre, materias en observación originales y porcentaje de alumnos con desaprobaciones, con número y porcentaje. El gráfico 8 (comparación histórica entre años) requiere datos de distintos años lectivos identificados y comparables (Fase 6).
       </p>
     </section>
   );

@@ -66,12 +66,14 @@ Los valores tienen el siguiente significado:
 |---|---|
 | A | Aprobado |
 | X | Desaprobado |
+| Número | Aprobado si es 6 o mayor; desaprobado si es menor a 6 |
 | Vacío | Sin información registrada |
 
 Reglas obligatorias:
 
 - A representa una materia aprobada en el período correspondiente.
 - X representa una materia desaprobada en el período correspondiente.
+- Las calificaciones numéricas se normalizan con el mismo criterio: 6 o más es aprobado, menos de 6 es desaprobado. Se aceptan decimales con coma o punto (`6,5`, `5.9`).
 - Un valor vacío no equivale a aprobado.
 - Un valor vacío no equivale a desaprobado.
 - Un valor vacío debe considerarse información desconocida o no registrada.
@@ -586,7 +588,7 @@ Responsable de:
 
 Responsable de:
 
-- Normalizar A/X.
+- Normalizar A/X y calificaciones numéricas (≥ 6 = aprobado, < 6 = desaprobado).
 - Conservar valores vacíos.
 - Normalizar nombres de materias.
 - Normalizar períodos.
@@ -699,6 +701,9 @@ Gráficos recomendados:
 8. Comparación histórica entre años.
 9. Matriz de alumnos y materias con situaciones detectadas.
 10. Distribución de alumnos según cantidad de materias pendientes.
+11. Desaprobaciones por cuatrimestre: cantidad de resultados X y de alumnos con desaprobaciones en 1C y 2C, con número y porcentaje.
+12. Materias en observación: cantidad y porcentaje de alumnos que tienen cada materia en el texto original de observaciones, con tabla por alumno.
+13. Porcentaje de alumnos con materias desaprobadas, con tablas separadas de 5 o más, 1 a 4 y ninguna materia desaprobada.
 
 Los gráficos deben basarse en datos reales y ocultar información personal identificable.
 

@@ -1,6 +1,7 @@
-import type { NormalizedDataset } from "@/types/academic";
+import type { NormalizedDataset, Period } from "@/types/academic";
 import type { StudentAnalysis } from "@/types/analysis";
 import type { ObservationResult } from "@/types/observations";
+import { normalizeHeaderKey, repairMojibake } from "@/lib/normalization/values";
 
 export interface CourseAggregations {
   totalStudents: number;
@@ -131,5 +132,248 @@ export function aggregateCourseData(
     pendingSubjectsDistribution,
     periodComparison,
     matrix: { studentLabels, subjects: dataset.subjects, cells: matrixCells },
+  };
+}
+
+/** Conteo de desaprobaciones separado por cuatrimestre, con porcentajes sobre la base correspondiente. */
+export interface DisapprovalsByPeriodMetric {
+  period: Period;
+  disapprovedResults: number;
+  evaluatedResults: number;
+  disapprovedPercentage: number;
+  studentsWithDisapproval: number;
+  totalStudents: number;
+  studentsPercentage: number;
+}
+
+export function getDisapprovalsByPeriod(analyses: StudentAnalysis[]): DisapprovalsByPeriodMetric[] {
+  const totalStudents = analyses.length;
+
+  return (["1C", "2C"] as const).map((period) => {
+    let disapprovedResults = 0;
+    let evaluatedResults = 0;
+    let studentsWithDisapproval = 0;
+
+    for (const analysis of analyses) {
+      let studentHasDisapproval = false;
+      for (const subject of analysis.subjects) {
+        const grade = subject.grades[period];
+        if (grade === "A" || grade === "X") evaluatedResults++;
+        if (grade === "X") {
+          disapprovedResults++;
+          studentHasDisapproval = true;
+        }
+      }
+      if (studentHasDisapproval) studentsWithDisapproval++;
+    }
+
+    return {
+      period,
+      disapprovedResults,
+      evaluatedResults,
+      disapprovedPercentage: evaluatedResults > 0 ? (disapprovedResults / evaluatedResults) * 100 : 0,
+      studentsWithDisapproval,
+      totalStudents,
+      studentsPercentage: totalStudents > 0 ? (studentsWithDisapproval / totalStudents) * 100 : 0,
+    };
+  });
+}
+
+const observationStopWords = new Set(["de", "del", "la", "las", "el", "los", "y", "en", "un", "una"]);
+
+function observationWords(raw: string): string[] {
+  return normalizeHeaderKey(raw)
+    // "2ª", "2do", etc. se convierten en "2 a", "2 do"; no son parte del nombre de la materia.
+    .replace(/\b\d{1,2}(?:\s+[a-z]+)?\b/g, " ")
+    .split(/\s+/)
+    .filter((token) => token.length > 0);
+}
+
+function observationTokens(raw: string): string[] {
+  return observationWords(raw).filter((token) => !observationStopWords.has(token));
+}
+
+function splitObservationText(text: string): string[] {
+  return text
+    .split(/[\n,;/|]|\s*-\s*/)
+    .map((fragment) => repairMojibake(fragment.trim()))
+    .filter((fragment) => fragment.length > 0);
+}
+
+function observationTokenMatches(fragmentToken: string, subjectToken: string): boolean {
+  if (fragmentToken === subjectToken) return true;
+  // Iniciales ("P.D.Leng." -> P, D, Leng) y abreviaturas por prefijo ("Hist." -> "historia").
+  if (fragmentToken.length === 1) return subjectToken.startsWith(fragmentToken);
+  if (fragmentToken.length >= 3 && subjectToken.length >= 3) {
+    if (fragmentToken.slice(0, 3) === subjectToken.slice(0, 3)) return true;
+    return subjectToken.startsWith(fragmentToken) || fragmentToken.startsWith(subjectToken);
+  }
+  return false;
+}
+
+function matchesCompoundAbbreviation(fragmentToken: string, subjectTokens: string[]): boolean {
+  if (fragmentToken.length < 5 || subjectTokens.length < 2) return false;
+  const abbreviation = subjectTokens.map((token) => token.slice(0, 3)).join("");
+  return abbreviation.startsWith(fragmentToken) || fragmentToken.startsWith(abbreviation);
+}
+
+function matchObservationSubject(
+  fragment: string,
+  subjects: Array<{ name: string; key: string; words: string[]; contentTokens: string[] }>,
+): string | null {
+  const tokens = observationTokens(fragment);
+  if (tokens.length === 0) return null;
+
+  const key = tokens.join(" ");
+  const exact = subjects.find((subject) => subject.key === key);
+  if (exact) return exact.name;
+
+  let best: { name: string; score: number } | null = null;
+  for (const subject of subjects) {
+    const available = [...subject.words];
+    let matched = 0;
+    let compoundMatches = 0;
+
+    for (const token of tokens) {
+      // Primero las abreviaturas compuestas ("FisQuim" -> "Física y Química") para no
+      // quedarse con una materia de un solo token que comparte las primeras letras.
+      let index = available.length > 0 && matchesCompoundAbbreviation(token, subject.contentTokens) ? 0 : -1;
+      if (index !== -1) compoundMatches++;
+      else index = available.findIndex((word) => observationTokenMatches(token, word));
+      if (index === -1) break;
+      available.splice(index, 1);
+      matched++;
+    }
+
+    if (matched !== tokens.length) continue;
+    const score = matched / Math.max(subject.words.length, 1) + compoundMatches;
+    if (!best || score > best.score) best = { name: subject.name, score };
+  }
+  return best?.name ?? null;
+}
+
+export interface ObservationStudentRow {
+  studentId: string;
+  studentName: string;
+  studentNumber: string | null;
+  /** Materias detectadas en el texto de observaciones originales. */
+  subjects: string[];
+  /** Fragmentos que no pudieron asociarse a ninguna materia. */
+  unmatched: string[];
+}
+
+export interface ObservationMetrics {
+  rows: ObservationStudentRow[];
+  bySubject: Array<{ subject: string; students: number; percentage: number }>;
+  studentsWithObservations: number;
+  unmatchedFragments: number;
+  totalStudents: number;
+}
+
+/** Materias mencionadas en la columna "Observaciones" original de la planilla. */
+export function getObservationMetrics(dataset: NormalizedDataset): ObservationMetrics {
+  const subjectEntries = dataset.subjects.map((name) => ({
+    name,
+    key: observationTokens(name).join(" "),
+    words: observationWords(name),
+    contentTokens: observationTokens(name),
+  }));
+  const subjectCounts = new Map<string, number>();
+  const rows: ObservationStudentRow[] = [];
+  let studentsWithObservations = 0;
+  let unmatchedFragments = 0;
+
+  for (const student of dataset.students) {
+    const matchedSubjects = new Set<string>();
+    const unmatched = new Set<string>();
+
+    if (student.originalObservation) {
+      for (const fragment of splitObservationText(student.originalObservation)) {
+        const subject = matchObservationSubject(fragment, subjectEntries);
+        if (subject) matchedSubjects.add(subject);
+        else unmatched.add(fragment);
+      }
+    }
+
+    if (matchedSubjects.size > 0 || unmatched.size > 0) studentsWithObservations++;
+    unmatchedFragments += unmatched.size;
+    for (const subject of matchedSubjects) {
+      subjectCounts.set(subject, (subjectCounts.get(subject) ?? 0) + 1);
+    }
+    rows.push({
+      studentId: student.id,
+      studentName: student.name,
+      studentNumber: student.studentNumber,
+      subjects: [...matchedSubjects],
+      unmatched: [...unmatched],
+    });
+  }
+
+  const totalStudents = dataset.students.length;
+  const bySubject = dataset.subjects
+    .map((subject) => {
+      const students = subjectCounts.get(subject) ?? 0;
+      return {
+        subject,
+        students,
+        percentage: totalStudents > 0 ? (students / totalStudents) * 100 : 0,
+      };
+    })
+    .filter((entry) => entry.students > 0)
+    .sort((a, b) => b.students - a.students || a.subject.localeCompare(b.subject));
+
+  return {
+    rows,
+    bySubject,
+    studentsWithObservations,
+    unmatchedFragments,
+    totalStudents,
+  };
+}
+
+export interface DisapprovedStudentRow {
+  studentId: string;
+  studentName: string;
+  studentNumber: string | null;
+  disapprovedSubjects: number;
+}
+
+export interface DisapprovalBuckets {
+  fiveOrMore: DisapprovedStudentRow[];
+  oneToFour: DisapprovedStudentRow[];
+  none: DisapprovedStudentRow[];
+  withAny: number;
+  totalStudents: number;
+  withAnyPercentage: number;
+  withoutPercentage: number;
+}
+
+/** Alumnos agrupados por cantidad de materias desaprobadas (5 o más / 1 a 4 / ninguna). */
+export function getStudentsByDisapprovedSubjects(
+  analyses: StudentAnalysis[],
+  period: "both" | Period,
+): DisapprovalBuckets {
+  const rows: DisapprovedStudentRow[] = analyses.map((analysis) => ({
+    studentId: analysis.studentId,
+    studentName: analysis.studentName,
+    studentNumber: analysis.studentNumber,
+    disapprovedSubjects:
+      period === "both"
+        ? analysis.summary.subjectsWithAnyDisapproval
+        : analysis.subjects.filter((subject) => subject.grades[period] === "X").length,
+  }));
+
+  const totalStudents = rows.length;
+  const withAny = rows.filter((row) => row.disapprovedSubjects > 0).length;
+  const without = totalStudents - withAny;
+
+  return {
+    fiveOrMore: rows.filter((row) => row.disapprovedSubjects >= 5),
+    oneToFour: rows.filter((row) => row.disapprovedSubjects >= 1 && row.disapprovedSubjects <= 4),
+    none: rows.filter((row) => row.disapprovedSubjects === 0),
+    withAny,
+    totalStudents,
+    withAnyPercentage: totalStudents > 0 ? (withAny / totalStudents) * 100 : 0,
+    withoutPercentage: totalStudents > 0 ? (without / totalStudents) * 100 : 0,
   };
 }
